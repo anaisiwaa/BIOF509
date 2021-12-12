@@ -1,0 +1,67 @@
+library(recount)
+library(MLSeq)
+#Download Data from Recount
+url2 <- download_study('SRP057500', type = "counts-gene", outdir = "./", download = TRUE, version = 2)
+#Phen <- download_study('SRP057500', type = "all", outdir = "./", download = TRUE, version = 2)
+ 
+#create a class label information in order to apply classification models.
+class <- DataFrame(condition = factor(rep(c("T","N","T"), c(89, 55, 144))))
+
+#Read downloaded row read count table from file
+dfx<-as.data.frame(fread("C:/Users/Henrietta/Desktop/Data/counts_gene_SRP057500.tsv"))
+#Make geneID rownames
+df2<- dfx%>%remove_rownames%>%column_to_rownames(var="gene_id")
+#load packages
+library(DESeq2)
+library(MLSeq)
+library(dplyr)
+library(S4Vector)
+set.seed(2128)
+#Rank top genes based on gene-wise variances 
+vars <- sort(apply(df2, 1, var, na.rm = TRUE), decreasing = TRUE)
+#Select top 200 genes in order to decrease computational cost
+data <- df2[names(vars)[1:200], ]
+#divide data in testing and training set
+nTest <- ceiling(ncol(data) * 0.3)
+ind <- sample(ncol(data), nTest, FALSE)
+data.train <- as.matrix(data[ ,-ind] + 1)
+data.test <- as.matrix(data[ ,ind] + 1)
+classtr <- DataFrame(condition = class[-ind, ])
+classts <- DataFrame(condition = class[ind, ])
+#define the training set
+data.trainS4 = DESeqDataSetFromMatrix(countData = data.train, colData = classtr,
+                                      design = formula(~condition))
+#define test set
+data.testS4 = DESeqDataSetFromMatrix(countData = data.test, colData = classts,
+                                     design = formula(~condition))
+#perform Random Forest Classification
+fit <- classify(data = data.trainS4, method = "rf",
+                preProcessing = "deseq-vst", ref = "T",
+                control = trainControl(method = "repeatedcv", number = 10, repeats = 2, classProbs = TRUE))
+show(fit)
+
+trained(fit)
+#perform Nsc classification
+ctrl.continuous <- trainControl(method = "repeatedcv", number = 5, repeats = 10)
+fit.NSC <- classify(data = data.trainS4, method = "pam",
+                    preProcessing = "deseq-vst", ref = "T", tuneLength = 10,
+                    control = ctrl.continuous)
+show(fit.NSC)
+selectedGenes(fit.NSC)
+
+#Perfom SVM
+fit.svm <- classify(data = data.trainS4, method = "svmRadial",
+                    preProcessing = "deseq-vst", ref = "T", tuneLength = 10,
+                    control = trainControl(method = "repeatedcv", number = 5, repeats = 2, classProbs = TRUE))
+show(fit.svm)
+selectedGenes(fit.svm)
+                                           
+#VoomNSC Classification   
+ctrl.voom <- voomControl(method = "repeatedcv", number = 5, repeats = 10, tuneLength = 10)
+
+fit.voomNSC <- classify(data = data.trainS4, method = "voomNSC", normalize = "deseq", ref = "T", control = ctrl.voom) 
+show(fit.voomNSC)
+trained(fit.voomNSC)
+
+#Identification of potential biomarkers
+selectedGenes(fit.voomNSC)
